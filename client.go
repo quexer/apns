@@ -200,3 +200,7 @@ func (client *Client) getCertificate() error {
 
 	return err
 }
+
+func (client *Client) Close(){
+	client.apnsConnection.Close()
+}
