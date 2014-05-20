@@ -202,5 +202,8 @@ func (client *Client) getCertificate() error {
 }
 
 func (client *Client) Close(){
+	if client.apnsConnection == nil {
+		return
+	}
 	client.apnsConnection.Close()
 }
