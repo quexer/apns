@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"time"
+	"log"
 )
 
 // Client contains the fields necessary to communicate
@@ -104,6 +105,7 @@ func (client *Client) ConnectAndWrite(resp *PushNotificationResponse, payload []
 
 	bytesWritten, err = client.apnsConnection.Write(payload)
 	if err != nil {
+		log.Println("write error", err)
 		if err.Error() != "use of closed network connection" {
 			return err
 		}
@@ -151,9 +153,13 @@ func (client *Client) ConnectAndWrite(resp *PushNotificationResponse, payload []
 	// The first byte will always be set to 8.
 	select {
 	case r := <-responseChannel:
-		resp.Success = false
-		resp.AppleResponse = ApplePushResponses[r[1]]
-		err = errors.New(resp.AppleResponse)
+		if r[1] == 0{
+			resp.Success = true
+		}else{
+			resp.Success = false
+			resp.AppleResponse = ApplePushResponses[r[1]]
+			err = errors.New(resp.AppleResponse)
+		}
 	case <-timeoutChannel:
 		resp.Success = true
 	}
@@ -167,6 +173,7 @@ func (client *Client) ConnectAndWrite(resp *PushNotificationResponse, payload []
 func (client *Client) openConnection() error {
 	err := client.getCertificate()
 	if err != nil {
+		log.Println("cert err", err)
 		return err
 	}
 
@@ -176,12 +183,14 @@ func (client *Client) openConnection() error {
 
 	conn, err := net.Dial("tcp", client.Gateway)
 	if err != nil {
+		log.Println("open connection err", err)
 		return err
 	}
 
 	tlsConn := tls.Client(conn, conf)
 	err = tlsConn.Handshake()
 	if err != nil {
+		log.Println("tls handshake err", err)
 		return err
 	}
 
