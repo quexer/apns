@@ -73,6 +73,13 @@ func (client *Client) Send(pn *PushNotification) (resp *PushNotificationResponse
 	return
 }
 
+func (client *Client) Connect() error{
+	if client.apnsConnection == nil {
+		return client.openConnection()
+	}
+	return nil
+}
+
 // ConnectAndWrite establishes the connection to Apple and handles the
 // transmission of your push notification, as well as waiting for a reply.
 //
