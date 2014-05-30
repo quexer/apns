@@ -7,6 +7,7 @@ import (
 	"net"
 	"time"
 	"log"
+	"io"
 )
 
 // Client contains the fields necessary to communicate
@@ -106,7 +107,7 @@ func (client *Client) ConnectAndWrite(resp *PushNotificationResponse, payload []
 	bytesWritten, err = client.apnsConnection.Write(payload)
 	if err != nil {
 		log.Println("write error", err)
-		if err.Error() != "use of closed network connection" {
+		if err != io.EOF && err.Error() != "use of closed network connection"{
 			return err
 		}
 
