@@ -133,6 +133,8 @@ func (client *Client) ConnectAndWrite(resp *PushNotificationResponse, payload []
 		}
 	}
 
+	//todo, improve performance
+
 	// Create one channel that will serve to handle
 	// timeouts when the notification succeeds.
 	timeoutChannel := make(chan bool, 1)
