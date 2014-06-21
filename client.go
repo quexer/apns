@@ -8,6 +8,7 @@ import (
 	"time"
 	"log"
 	"io"
+	"sync"
 )
 
 // Client contains the fields necessary to communicate
@@ -21,6 +22,7 @@ import (
 // but if you prefer you can use the CertificateBase64
 // and KeyBase64 fields to store the actual contents.
 type Client struct {
+	sync.Mutex
 	Gateway           string
 	CertificateFile   string
 	CertificateBase64 string
@@ -61,6 +63,10 @@ func (client *Client) Send(pn *PushNotification) (resp *PushNotificationResponse
 		resp.Error = err
 		return
 	}
+
+	//lock for thread safe
+	client.Lock()
+	defer client.Unlock()
 
 	err = client.ConnectAndWrite(resp, payload)
 	if err != nil {
