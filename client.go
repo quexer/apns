@@ -9,6 +9,7 @@ import (
 	"log"
 	"io"
 	"sync"
+	"strings"
 )
 
 // Client contains the fields necessary to communicate
@@ -188,6 +189,7 @@ func (client *Client) openConnection() error {
 
 	conf := &tls.Config{
 		Certificates: []tls.Certificate{client.certificate},
+		ServerName:  strings.Split(client.Gateway, ":")[0],
 	}
 
 	conn, err := net.Dial("tcp", client.Gateway)
