@@ -8,6 +8,7 @@ import (
 	"errors"
 	"net"
 	"time"
+	"strings"
 )
 
 // Wait at most this many seconds for feedback data from Apple.
@@ -55,6 +56,7 @@ func (client *Client) ListenForFeedback() (err error) {
 
 	conf := &tls.Config{
 		Certificates: []tls.Certificate{cert},
+		ServerName:  strings.Split(client.Gateway, ":")[0],
 	}
 
 	conn, err := net.Dial("tcp", client.Gateway)
