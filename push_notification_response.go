@@ -20,6 +20,18 @@ var ApplePushResponses = map[uint8]string{
 	255: "UNKNOWN",
 }
 
+
+const (
+	ERR_RESPONSE_LEN = 6
+	ERR_RESPONSE_CMD = 8
+)
+
+type errResponse struct {
+	Command uint8
+	Status uint8
+	Identifier int32
+}
+
 // PushNotificationResponse details what Apple had to say, if anything.
 type PushNotificationResponse struct {
 	Success       bool

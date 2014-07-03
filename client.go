@@ -2,14 +2,18 @@ package apns
 
 import (
 	"crypto/tls"
-	"errors"
 	"fmt"
 	"net"
-	"time"
 	"log"
 	"io"
 	"sync"
 	"strings"
+	"bytes"
+	"encoding/binary"
+)
+
+const (
+	MAX_SEND_Q = 3000
 )
 
 // Client contains the fields necessary to communicate
@@ -31,13 +35,16 @@ type Client struct {
 	KeyBase64         string
 	certificate       tls.Certificate
 	apnsConnection    *tls.Conn
+	errChan           chan *errResponse
+	sentQ              *pnQueue
+	counter           int32
+	running           bool
 }
 
 // BareClient can be used to set the contents of your
 // certificate and key blocks manually.
 func BareClient(gateway, certificateBase64, keyBase64 string) (c *Client) {
-	c = new(Client)
-	c.Gateway = gateway
+	c = create(gateway)
 	c.CertificateBase64 = certificateBase64
 	c.KeyBase64 = keyBase64
 	return
@@ -46,43 +53,89 @@ func BareClient(gateway, certificateBase64, keyBase64 string) (c *Client) {
 // NewClient assumes you'll be passing in paths that
 // point to your certificate and key.
 func NewClient(gateway, certificateFile, keyFile string) (c *Client) {
-	c = new(Client)
-	c.Gateway = gateway
+	c = create(gateway)
 	c.CertificateFile = certificateFile
 	c.KeyFile = keyFile
 	return
 }
 
-// Send connects to the APN service and sends your push notification.
-// Remember that if the submission is successful, Apple won't reply.
-func (client *Client) Send(pn *PushNotification) (resp *PushNotificationResponse) {
-	resp = new(PushNotificationResponse)
+func create(gateway string)(c *Client){
+	c = new(Client)
+	c.Gateway = gateway
+	c.errChan = make(chan *errResponse, 10)
+	c.sentQ = newPnQueue(MAX_SEND_Q)
+	c.running = true
 
-	payload, err := pn.ToBytes()
-	if err != nil {
-		resp.Success = false
-		resp.Error = err
-		return
-	}
+	go func() {
+		for res := range c.errChan {
+			if (!c.IsRunning()){
+				return
+			}
+			c.handleErrResponse(res)
+		}
+	}()
 
-	//lock for thread safe
+	return c
+}
+
+func (client *Client) IsRunning() bool{
 	client.Lock()
 	defer client.Unlock()
 
-	err = client.ConnectAndWrite(resp, payload)
-	if err != nil {
-		resp.Success = false
-		resp.Error = err
+	return client.running
+}
+
+func (client *Client) handleErrResponse(res *errResponse){
+	client.Lock()
+	defer client.Unlock()
+
+	if res.Command == 0 {
+		//no error
 		return
 	}
 
-	resp.Success = true
-	resp.Error = nil
+	errPn, reSend := client.sentQ.Tail(res.Identifier)
+	log.Printf("handle err response %d, %##v\n", res.Identifier, errPn)
 
-	return
+	if errPn == nil {
+		return
+	}
+	client.sentQ.Clear()
+	go func() {
+		for _, pn := range reSend{
+			if err := client.Send(pn); err != nil {
+				log.Println("re-send err", err, pn.Identifier)
+			}
+		}
+	}()
+}
+
+// Send connects to the APN service and sends your push notification.
+// Remember that if the submission is successful, Apple won't reply.
+func (client *Client) Send(pn *PushNotification) error {
+	client.Lock()
+	defer client.Unlock()
+
+	pn.Identifier = client.counter
+	client.counter = (client.counter + 1) % IdentifierUbound
+
+	payload, err := pn.ToBytes()
+	if err != nil {
+		return err
+	}
+
+	err = client.connectAndWrite(payload);
+	if  err == nil {
+		log.Println("append into sendQ")
+		client.sentQ.Append(pn)
+	}
+	return err
 }
 
 func (client *Client) Connect() error{
+	client.Lock()
+	defer client.Unlock()
+
 	if client.apnsConnection == nil {
 		return client.openConnection()
 	}
@@ -100,18 +153,15 @@ func (client *Client) Connect() error{
 // Whichever channel puts data on first is the "winner". As such, it's
 // possible to get a false positive if Apple takes a long time to respond.
 // It's probably not a deal-breaker, but something to be aware of.
-func (client *Client) ConnectAndWrite(resp *PushNotificationResponse, payload []byte) error {
-	var bytesWritten int
-	var err error
-
+func (client *Client) connectAndWrite(payload []byte) error {
 	if client.apnsConnection == nil {
-		err = client.openConnection()
-		if err != nil {
+		if err := client.openConnection(); err != nil {
 			return err
 		}
 	}
 
-	bytesWritten, err = client.apnsConnection.Write(payload)
+	log.Printf("write bytes %p\n", client)
+	bytesWritten, err := client.apnsConnection.Write(payload)
 	if err != nil {
 		log.Println("write error", err)
 		if err != io.EOF && err.Error() != "use of closed network connection"{
@@ -119,8 +169,7 @@ func (client *Client) ConnectAndWrite(resp *PushNotificationResponse, payload []
 		}
 
 		// If the connection is closed, reconnect
-		err = client.openConnection()
-		if err != nil {
+		if err := client.openConnection(); err != nil {
 			return err
 		}
 
@@ -130,50 +179,10 @@ func (client *Client) ConnectAndWrite(resp *PushNotificationResponse, payload []
 		}
 		if bytesWritten == 0 {
 			client.apnsConnection.Close()
+			client.apnsConnection = nil
 			return fmt.Errorf("Could not open connection to %s.  Please try again.", client.Gateway)
 		}
 	}
-
-	//todo, improve performance
-
-	// Create one channel that will serve to handle
-	// timeouts when the notification succeeds.
-	timeoutChannel := make(chan bool, 1)
-	go func() {
-		time.Sleep(time.Second * TimeoutSeconds)
-		timeoutChannel <- true
-	}()
-
-	// This channel will contain the binary response
-	// from Apple in the event of a failure.
-	responseChannel := make(chan []byte, 1)
-	go func() {
-		buffer := make([]byte, 6, 6)
-		client.apnsConnection.Read(buffer)
-		responseChannel <- buffer
-	}()
-
-	// First one back wins!
-	// The data structure for an APN response is as follows:
-	//
-	// command    -> 1 byte
-	// status     -> 1 byte
-	// identifier -> 4 bytes
-	//
-	// The first byte will always be set to 8.
-	select {
-	case r := <-responseChannel:
-		if r[1] == 0{
-			resp.Success = true
-		}else{
-			resp.Success = false
-			resp.AppleResponse = ApplePushResponses[r[1]]
-			err = errors.New(resp.AppleResponse)
-		}
-	case <-timeoutChannel:
-		resp.Success = true
-	}
-
 	return err
 }
 
@@ -181,6 +190,7 @@ func (client *Client) ConnectAndWrite(resp *PushNotificationResponse, payload []
 // The connection is created and persisted to the client's apnsConnection property
 //	to save on the overhead of the crypto libraries.
 func (client *Client) openConnection() error {
+	log.Printf("open connection %p\n", client)
 	err := client.getCertificate()
 	if err != nil {
 		log.Println("cert err", err)
@@ -206,7 +216,43 @@ func (client *Client) openConnection() error {
 	}
 
 	client.apnsConnection = tlsConn
+	go client.startRead()
 	return nil
+}
+
+func (client *Client) startRead(){
+	log.Printf("start read %p\n", client)
+	buffer := make([]byte, ERR_RESPONSE_LEN)
+
+	if _, err := client.apnsConnection.Read(buffer); err != nil{
+		log.Println("read err", err)
+		return
+	}
+
+	errRsp := &errResponse{
+		Command: uint8(buffer[0]),
+		Status: uint8(buffer[1]),
+	}
+
+	if err := binary.Read(bytes.NewBuffer(buffer[2:]), binary.BigEndian, &errRsp.Identifier); err != nil {
+		log.Println("read identifier err", err)
+		return
+	}
+
+	if errRsp.Command != ERR_RESPONSE_CMD{
+		log.Println("unknown err response", buffer)
+		return
+	}
+
+	errMsg, ok := ApplePushResponses[errRsp.Status]
+	if !ok {
+		log.Println("unknown err status", buffer)
+		return
+	}
+
+	log.Printf("get err response : %##v, %s\n", errRsp, errMsg)
+
+	client.errChan <- errRsp
 }
 
 // Returns a certificate to use to send the notification.
@@ -229,6 +275,11 @@ func (client *Client) getCertificate() error {
 }
 
 func (client *Client) Close(){
+	client.Lock()
+	defer client.Unlock()
+
+	client.running = false
+
 	if client.apnsConnection == nil {
 		return
 	}
