@@ -1,15 +1,14 @@
 package apns
 
 import (
-	"crypto/tls"
-	"fmt"
-	"net"
-	"log"
-	"io"
-	"sync"
-	"strings"
 	"bytes"
+	"crypto/tls"
 	"encoding/binary"
+	"fmt"
+	"log"
+	"net"
+	"strings"
+	"sync"
 )
 
 const (
@@ -36,7 +35,7 @@ type Client struct {
 	certificate       tls.Certificate
 	apnsConnection    *tls.Conn
 	errChan           chan *errResponse
-	sentQ              *pnQueue
+	sentQ             *pnQueue
 	counter           int32
 	running           bool
 }
@@ -59,7 +58,7 @@ func NewClient(gateway, certificateFile, keyFile string) (c *Client) {
 	return
 }
 
-func create(gateway string)(c *Client){
+func create(gateway string) (c *Client) {
 	c = new(Client)
 	c.Gateway = gateway
 	c.errChan = make(chan *errResponse, 10)
@@ -68,7 +67,7 @@ func create(gateway string)(c *Client){
 
 	go func() {
 		for res := range c.errChan {
-			if (!c.IsRunning()){
+			if !c.IsRunning() {
 				return
 			}
 			c.handleErrResponse(res)
@@ -78,14 +77,14 @@ func create(gateway string)(c *Client){
 	return c
 }
 
-func (client *Client) IsRunning() bool{
+func (client *Client) IsRunning() bool {
 	client.Lock()
 	defer client.Unlock()
 
 	return client.running
 }
 
-func (client *Client) handleErrResponse(res *errResponse){
+func (client *Client) handleErrResponse(res *errResponse) {
 	client.Lock()
 	defer client.Unlock()
 
@@ -102,7 +101,7 @@ func (client *Client) handleErrResponse(res *errResponse){
 	}
 	client.sentQ.Clear()
 	go func() {
-		for _, pn := range reSend{
+		for _, pn := range reSend {
 			if err := client.Send(pn); err != nil {
 				log.Println("re-send err", err, pn.Identifier)
 			}
@@ -117,22 +116,22 @@ func (client *Client) Send(pn *PushNotification) error {
 	defer client.Unlock()
 
 	pn.Identifier = client.counter
-	client.counter = (client.counter + 1) % IdentifierUbound
+	client.counter = (client.counter+1)%IdentifierUbound
 
 	payload, err := pn.ToBytes()
 	if err != nil {
 		return err
 	}
 
-	err = client.connectAndWrite(payload);
-	if  err == nil {
+	err = client.connectAndWrite(payload)
+	if err == nil {
 		log.Println("append into sendQ")
 		client.sentQ.Append(pn)
 	}
 	return err
 }
 
-func (client *Client) Connect() error{
+func (client *Client) Connect() error {
 	client.Lock()
 	defer client.Unlock()
 
@@ -163,10 +162,11 @@ func (client *Client) connectAndWrite(payload []byte) error {
 	log.Printf("write bytes %p\n", client)
 	bytesWritten, err := client.apnsConnection.Write(payload)
 	if err != nil {
-		log.Println("write error", err)
-		if err != io.EOF && err.Error() != "use of closed network connection"{
-			return err
-		}
+		log.Println("write error ", err, "try again")
+		//		if err != io.EOF && err.Error() != "use of closed network connection" && err != syscall.EPIPE {
+		//			return err
+		//		}
+		//		log.Println("try again")
 
 		// If the connection is closed, reconnect
 		if err := client.openConnection(); err != nil {
@@ -199,7 +199,7 @@ func (client *Client) openConnection() error {
 
 	conf := &tls.Config{
 		Certificates: []tls.Certificate{client.certificate},
-		ServerName:  strings.Split(client.Gateway, ":")[0],
+		ServerName:   strings.Split(client.Gateway, ":")[0],
 	}
 
 	conn, err := net.Dial("tcp", client.Gateway)
@@ -220,18 +220,18 @@ func (client *Client) openConnection() error {
 	return nil
 }
 
-func (client *Client) startRead(){
+func (client *Client) startRead() {
 	log.Printf("start read %p\n", client)
 	buffer := make([]byte, ERR_RESPONSE_LEN)
 
-	if _, err := client.apnsConnection.Read(buffer); err != nil{
+	if _, err := client.apnsConnection.Read(buffer); err != nil {
 		log.Println("read err", err)
 		return
 	}
 
 	errRsp := &errResponse{
 		Command: uint8(buffer[0]),
-		Status: uint8(buffer[1]),
+		Status:  uint8(buffer[1]),
 	}
 
 	if err := binary.Read(bytes.NewBuffer(buffer[2:]), binary.BigEndian, &errRsp.Identifier); err != nil {
@@ -239,7 +239,7 @@ func (client *Client) startRead(){
 		return
 	}
 
-	if errRsp.Command != ERR_RESPONSE_CMD{
+	if errRsp.Command != ERR_RESPONSE_CMD {
 		log.Println("unknown err response", buffer)
 		return
 	}
@@ -274,7 +274,7 @@ func (client *Client) getCertificate() error {
 	return err
 }
 
-func (client *Client) Close(){
+func (client *Client) Close() {
 	client.Lock()
 	defer client.Unlock()
 

@@ -2,16 +2,16 @@ package apns
 
 import "testing"
 
-func TestQ(t *testing.T){
+func TestQ(t *testing.T) {
 	q := newPnQueue(1000)
-	for i  := 0; i < 1000; i ++ {
-		pn :=NewPushNotification()
+	for i := 0; i < 1000; i++ {
+		pn := NewPushNotification()
 		pn.Identifier = int32(i)
 		q.Append(pn)
 	}
 	p, l := q.Tail(499)
 
-	if p == nil || len(l) != 500{
+	if p == nil || len(l) != 500 {
 		t.Error("tail err", p, len(l))
 	}
 
@@ -20,11 +20,11 @@ func TestQ(t *testing.T){
 	q.Append(pn)
 
 	p, l = q.Tail(500)
-	if p == nil || len(l) != 500{
+	if p == nil || len(l) != 500 {
 		t.Error("tail after shift err")
 	}
 
-	if p.Identifier != 500{
+	if p.Identifier != 500 {
 		t.Error("shift err", p.Identifier)
 	}
 

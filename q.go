@@ -16,7 +16,7 @@ func (p *pnQueue) Append(pn *PushNotification) {
 	p.Lock()
 	defer p.Unlock()
 
-		p.data = append(p.data, pn)
+	p.data = append(p.data, pn)
 	if len(p.data) > p.cap {
 		p.data = p.data[len(p.data)-p.cap:]
 	}
@@ -29,9 +29,9 @@ func (p *pnQueue) Tail(errId int32) (*PushNotification, []*PushNotification) {
 
 	for i, pn := range p.data {
 		if pn.Identifier == errId {
-			if (i + 1 < len(p.data)){
-				return pn, p.data[i + 1:]
-			}else{
+			if i+1 < len(p.data) {
+				return pn, p.data[i+1:]
+			} else {
 				return pn, nil
 			}
 		}
@@ -39,7 +39,7 @@ func (p *pnQueue) Tail(errId int32) (*PushNotification, []*PushNotification) {
 	return nil, nil
 }
 
-func (p *pnQueue) Clear(){
+func (p *pnQueue) Clear() {
 	p.Lock()
 	defer p.Unlock()
 
