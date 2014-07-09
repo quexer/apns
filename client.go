@@ -116,7 +116,7 @@ func (client *Client) Send(pn *PushNotification) error {
 	defer client.Unlock()
 
 	pn.Identifier = client.counter
-	client.counter = (client.counter+1)%IdentifierUbound
+	client.counter = (client.counter + 1) % IdentifierUbound
 
 	payload, err := pn.ToBytes()
 	if err != nil {
@@ -216,16 +216,17 @@ func (client *Client) openConnection() error {
 	}
 
 	client.apnsConnection = tlsConn
-	go client.startRead()
+	go client.startRead(tlsConn)
 	return nil
 }
 
-func (client *Client) startRead() {
+func (client *Client) startRead(conn *tls.Conn) {
 	log.Printf("start read %p\n", client)
 	buffer := make([]byte, ERR_RESPONSE_LEN)
 
-	if _, err := client.apnsConnection.Read(buffer); err != nil {
+	if _, err := conn.Read(buffer); err != nil {
 		log.Println("read err", err)
+		conn.Close()
 		return
 	}
 
