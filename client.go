@@ -227,6 +227,12 @@ func (client *Client) startRead(conn *tls.Conn) {
 	if _, err := conn.Read(buffer); err != nil {
 		log.Println("read err", err)
 		conn.Close()
+
+		client.Lock()
+		defer client.Unlock()
+		if conn == client.apnsConnection {
+			client.apnsConnection = nil
+		}
 		return
 	}
 
