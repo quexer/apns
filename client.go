@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"crypto/tls"
 	"encoding/binary"
-	"fmt"
 	"log"
 	"net"
 	"strings"
@@ -160,7 +159,7 @@ func (client *Client) connectAndWrite(payload []byte) error {
 	}
 
 	log.Printf("write bytes %p\n", client)
-	bytesWritten, err := client.apnsConnection.Write(payload)
+	_, err := client.apnsConnection.Write(payload)
 	if err != nil {
 		log.Println("write error ", err, "try again")
 		//		if err != io.EOF && err.Error() != "use of closed network connection" && err != syscall.EPIPE {
@@ -173,14 +172,9 @@ func (client *Client) connectAndWrite(payload []byte) error {
 			return err
 		}
 
-		bytesWritten, err = client.apnsConnection.Write(payload)
-		if err != nil {
-			return err
-		}
-		if bytesWritten == 0 {
-			client.apnsConnection.Close()
+		if _, err := client.apnsConnection.Write(payload); err != nil {
 			client.apnsConnection = nil
-			return fmt.Errorf("Could not open connection to %s.  Please try again.", client.Gateway)
+			return err
 		}
 	}
 	return err
