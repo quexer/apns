@@ -14,6 +14,10 @@ const (
 	MAX_SEND_Q = 3000
 )
 
+var (
+	ErrChannel = make(chan *PushNotification)
+)
+
 // Client contains the fields necessary to communicate
 // with Apple, such as the gateway to use and your
 // certificate contents.
@@ -98,6 +102,11 @@ func (client *Client) handleErrResponse(res *errResponse) {
 	if errPn == nil {
 		return
 	}
+
+	go func() {
+		ErrChannel <- errPn
+	}()
+
 	client.sentQ.Clear()
 	go func() {
 		for _, pn := range reSend {
@@ -124,9 +133,13 @@ func (client *Client) Send(pn *PushNotification) error {
 
 	err = client.connectAndWrite(payload)
 	if err == nil {
-		log.Println("append into sendQ")
 		client.sentQ.Append(pn)
+	} else {
+		go func() {
+			ErrChannel <- pn
+		}()
 	}
+
 	return err
 }
 
