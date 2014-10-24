@@ -207,6 +207,7 @@ func (client *Client) openConnection() error {
 	conf := &tls.Config{
 		Certificates: []tls.Certificate{client.certificate},
 		ServerName:   strings.Split(client.Gateway, ":")[0],
+		MinVersion: tls.VersionTLS10,
 	}
 
 	conn, err := net.Dial("tcp", client.Gateway)
