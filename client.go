@@ -171,7 +171,6 @@ func (client *Client) connectAndWrite(payload []byte) error {
 		}
 	}
 
-	log.Printf("write bytes %p\n", client)
 	_, err := client.apnsConnection.Write(payload)
 	if err != nil {
 		log.Println("write error ", err, "try again")
