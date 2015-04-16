@@ -228,7 +228,6 @@ func (client *Client) openConnection() error {
 }
 
 func (client *Client) startRead(conn *tls.Conn) {
-	log.Printf("start read %p\n", client)
 	buffer := make([]byte, ERR_RESPONSE_LEN)
 
 	if _, err := conn.Read(buffer); err != nil {
