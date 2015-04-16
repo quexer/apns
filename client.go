@@ -105,6 +105,7 @@ func (client *Client) handleErrResponse(res *errResponse) {
 	log.Printf("handle err response %d, %##v\n", res.Identifier, errPn)
 
 	if errPn == nil {
+		log.Println("[warn] MAX_SEND_Q is too short:", MAX_SEND_Q)
 		return
 	}
 
