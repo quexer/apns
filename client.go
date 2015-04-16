@@ -15,8 +15,13 @@ const (
 )
 
 var (
-	ErrChannel = make(chan *PushNotification)
+	ErrChannel = make(chan *SendErr)
 )
+
+type SendErr struct {
+	Pn  *PushNotification
+	Res *errResponse
+}
 
 // Client contains the fields necessary to communicate
 // with Apple, such as the gateway to use and your
@@ -104,7 +109,7 @@ func (client *Client) handleErrResponse(res *errResponse) {
 	}
 
 	go func() {
-		ErrChannel <- errPn
+		ErrChannel <- &SendErr{Pn: errPn, Res: res}
 	}()
 
 	client.sentQ.Clear()
@@ -136,7 +141,7 @@ func (client *Client) Send(pn *PushNotification) error {
 		client.sentQ.Append(pn)
 	} else {
 		go func() {
-			ErrChannel <- pn
+			ErrChannel <- &SendErr{Pn: pn, Res: nil}
 		}()
 	}
 
