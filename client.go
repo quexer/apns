@@ -11,7 +11,7 @@ import (
 )
 
 const (
-	MAX_SEND_Q = 3000
+	MAX_SEND_Q = 10000
 )
 
 var (
