@@ -8,13 +8,12 @@ import (
 	"net"
 	"strings"
 	"sync"
-)
-
-const (
-	MAX_SEND_Q = 10000
+	"time"
 )
 
 var (
+	MAX_SEND_Q = 10000
+	TIME_OUT   = time.Minute // dial & write timeout, avoid infinite block
 	ErrChannel = make(chan *SendErr)
 )
 
@@ -177,6 +176,9 @@ func (client *Client) connectAndWrite(payload []byte) error {
 		}
 	}
 
+	if err := client.apnsConnection.SetWriteDeadline(time.Now().Add(TIME_OUT)); err != nil {
+		return err
+	}
 	_, err := client.apnsConnection.Write(payload)
 	if err != nil {
 		log.Println("write error ", err, "try again")
@@ -190,6 +192,9 @@ func (client *Client) connectAndWrite(payload []byte) error {
 			return err
 		}
 
+		if err := client.apnsConnection.SetWriteDeadline(time.Now().Add(TIME_OUT)); err != nil {
+			return err
+		}
 		if _, err := client.apnsConnection.Write(payload); err != nil {
 			client.apnsConnection = nil
 			return err
@@ -215,7 +220,7 @@ func (client *Client) openConnection() error {
 		MinVersion:   tls.VersionTLS10,
 	}
 
-	conn, err := net.Dial("tcp", client.Gateway)
+	conn, err := net.DialTimeout("tcp", client.Gateway, TIME_OUT)
 	if err != nil {
 		log.Println("open connection err", err)
 		return err
