@@ -181,6 +181,7 @@ func (client *Client) connectAndWrite(payload []byte) error {
 	}
 	_, err := client.apnsConnection.Write(payload)
 	if err != nil {
+		client.apnsConnection = nil
 		log.Println("write error ", err, "try again")
 		//		if err != io.EOF && err.Error() != "use of closed network connection" && err != syscall.EPIPE {
 		//			return err
@@ -234,22 +235,16 @@ func (client *Client) openConnection() error {
 	}
 
 	client.apnsConnection = tlsConn
-	go client.startRead(tlsConn)
+	go startRead(tlsConn, client.errChan)
 	return nil
 }
 
-func (client *Client) startRead(conn *tls.Conn) {
+func startRead(conn *tls.Conn, errChan chan<- *errResponse) {
 	buffer := make([]byte, ERR_RESPONSE_LEN)
 
 	if _, err := conn.Read(buffer); err != nil {
 		log.Println("read err", err)
 		conn.Close()
-
-		client.Lock()
-		defer client.Unlock()
-		if conn == client.apnsConnection {
-			client.apnsConnection = nil
-		}
 		return
 	}
 
@@ -276,7 +271,7 @@ func (client *Client) startRead(conn *tls.Conn) {
 
 	log.Printf("get err response : %##v, %s\n", errRsp, errMsg)
 
-	client.errChan <- errRsp
+	errChan <- errRsp
 }
 
 // Returns a certificate to use to send the notification.
