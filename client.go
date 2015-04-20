@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/tls"
 	"encoding/binary"
+	"io"
 	"log"
 	"net"
 	"strings"
@@ -33,7 +34,7 @@ type SendErr struct {
 // but if you prefer you can use the CertificateBase64
 // and KeyBase64 fields to store the actual contents.
 type Client struct {
-	sync.Mutex
+	sync.RWMutex
 	Gateway           string
 	CertificateFile   string
 	CertificateBase64 string
@@ -85,8 +86,8 @@ func create(gateway string) (c *Client) {
 }
 
 func (client *Client) IsRunning() bool {
-	client.Lock()
-	defer client.Unlock()
+	client.RLock()
+	defer client.RUnlock()
 
 	return client.running
 }
@@ -140,6 +141,7 @@ func (client *Client) Send(pn *PushNotification) error {
 	if err == nil {
 		client.sentQ.Append(pn)
 	} else {
+		client.apnsConnection = nil
 		go func() {
 			ErrChannel <- &SendErr{Pn: pn, Res: nil}
 		}()
@@ -181,7 +183,6 @@ func (client *Client) connectAndWrite(payload []byte) error {
 	}
 	_, err := client.apnsConnection.Write(payload)
 	if err != nil {
-		client.apnsConnection = nil
 		log.Println("write error ", err, "try again")
 		//		if err != io.EOF && err.Error() != "use of closed network connection" && err != syscall.EPIPE {
 		//			return err
@@ -197,7 +198,6 @@ func (client *Client) connectAndWrite(payload []byte) error {
 			return err
 		}
 		if _, err := client.apnsConnection.Write(payload); err != nil {
-			client.apnsConnection = nil
 			return err
 		}
 	}
@@ -235,16 +235,24 @@ func (client *Client) openConnection() error {
 	}
 
 	client.apnsConnection = tlsConn
-	go startRead(tlsConn, client.errChan)
+	go startRead(client, tlsConn, client.errChan)
 	return nil
 }
 
-func startRead(conn *tls.Conn, errChan chan<- *errResponse) {
+func (p *Client) tryReset(conn *tls.Conn) {
+	p.Lock()
+	defer p.Unlock()
+	if p.apnsConnection == conn {
+		p.apnsConnection = nil
+	}
+}
+func startRead(client *Client, conn *tls.Conn, errChan chan<- *errResponse) {
 	buffer := make([]byte, ERR_RESPONSE_LEN)
 
 	if _, err := conn.Read(buffer); err != nil {
-		log.Println("read err", err)
+		log.Printf("read err %v, %v, %p\n", err, err == io.EOF, client)
 		conn.Close()
+		client.tryReset(conn)
 		return
 	}
 
