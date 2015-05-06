@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/tls"
 	"encoding/binary"
+	"fmt"
 	"io"
 	"log"
 	"net"
@@ -75,9 +76,6 @@ func create(gateway string) (c *Client) {
 
 	go func() {
 		for res := range c.errChan {
-			if !c.IsRunning() {
-				return
-			}
 			c.handleErrResponse(res)
 		}
 	}()
@@ -85,16 +83,13 @@ func create(gateway string) (c *Client) {
 	return c
 }
 
-func (client *Client) IsRunning() bool {
-	client.RLock()
-	defer client.RUnlock()
-
-	return client.running
-}
-
 func (client *Client) handleErrResponse(res *errResponse) {
 	client.Lock()
 	defer client.Unlock()
+
+	if !client.running {
+		return
+	}
 
 	if res.Command == 0 {
 		//no error
@@ -114,13 +109,16 @@ func (client *Client) handleErrResponse(res *errResponse) {
 	}()
 
 	client.sentQ.Clear()
-	go func() {
-		for _, pn := range reSend {
-			if err := client.Send(pn); err != nil {
-				log.Println("re-send err", err, pn.Identifier)
+
+	if len(reSend) > 0 {
+		go func(l []*PushNotification) {
+			for _, pn := range l {
+				if err := client.Send(pn); err != nil {
+					log.Println("re-send err", err, pn.Identifier)
+				}
 			}
-		}
-	}()
+		}(reSend)
+	}
 }
 
 // Send connects to the APN service and sends your push notification.
@@ -128,6 +126,10 @@ func (client *Client) handleErrResponse(res *errResponse) {
 func (client *Client) Send(pn *PushNotification) error {
 	client.Lock()
 	defer client.Unlock()
+
+	if !client.running {
+		return fmt.Errorf("client is not running")
+	}
 
 	pn.Identifier = client.counter
 	client.counter = (client.counter + 1) % IdentifierUbound
@@ -153,6 +155,10 @@ func (client *Client) Send(pn *PushNotification) error {
 func (client *Client) Connect() error {
 	client.Lock()
 	defer client.Unlock()
+
+	if !client.running {
+		return fmt.Errorf("client is not running")
+	}
 
 	if client.apnsConnection == nil {
 		return client.openConnection()
@@ -235,24 +241,41 @@ func (client *Client) openConnection() error {
 	}
 
 	client.apnsConnection = tlsConn
-	go startRead(client, tlsConn, client.errChan)
+	go startRead(client, tlsConn)
 	return nil
 }
 
 func (p *Client) tryReset(conn *tls.Conn) {
 	p.Lock()
 	defer p.Unlock()
+
+	if !p.running {
+		return
+	}
+
 	if p.apnsConnection == conn {
 		p.apnsConnection = nil
 	}
 }
-func startRead(client *Client, conn *tls.Conn, errChan chan<- *errResponse) {
+
+func (p *Client) saveErr(errRsp *errResponse) {
+	p.Lock()
+	defer p.Unlock()
+
+	if !p.running {
+		return
+	}
+
+	p.errChan <- errRsp
+
+}
+func startRead(client *Client, conn *tls.Conn) {
 	buffer := make([]byte, ERR_RESPONSE_LEN)
 
 	if _, err := conn.Read(buffer); err != nil {
 		log.Printf("read err %v, %v, %p\n", err, err == io.EOF, client)
 		conn.Close()
-		client.tryReset(conn)
+		go client.tryReset(conn)
 		return
 	}
 
@@ -279,7 +302,7 @@ func startRead(client *Client, conn *tls.Conn, errChan chan<- *errResponse) {
 
 	log.Printf("get err response : %##v, %s\n", errRsp, errMsg)
 
-	errChan <- errRsp
+	go client.saveErr(errRsp)
 }
 
 // Returns a certificate to use to send the notification.
@@ -305,10 +328,17 @@ func (client *Client) Close() {
 	client.Lock()
 	defer client.Unlock()
 
-	client.running = false
-
-	if client.apnsConnection == nil {
+	if !client.running {
 		return
 	}
-	client.apnsConnection.Close()
+
+	client.running = false
+	close(client.errChan)
+
+	conn := client.apnsConnection
+	if conn == nil {
+		return
+	}
+	go conn.Close()
+	client.apnsConnection = nil
 }
