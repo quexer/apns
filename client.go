@@ -258,7 +258,7 @@ func (client *Client) openConnection() error {
 
 	tlsConn := tls.Client(conn, conf)
 	//add handshake timeout
-	if err := tlsConn.SetWriteDeadline(time.Now().Add(TIME_OUT)); err != nil {
+	if err := tlsConn.SetDeadline(time.Now().Add(TIME_OUT)); err != nil {
 		return err
 	}
 	err = tlsConn.Handshake()
@@ -267,6 +267,10 @@ func (client *Client) openConnection() error {
 		return err
 	}
 
+	//clear read timeout
+	if err := tlsConn.SetReadDeadline(time.Time{}); err != nil {
+		return err
+	}
 	client.apnsConnection = tlsConn
 	go read(client, tlsConn)
 	return nil
