@@ -4,12 +4,10 @@ import (
 	"bytes"
 	"crypto/tls"
 	"encoding/binary"
-	"fmt"
 	"io"
 	"log"
 	"net"
 	"strings"
-	"sync"
 	"time"
 )
 
@@ -24,6 +22,15 @@ type SendErr struct {
 	Res *errResponse
 }
 
+type opSend struct {
+	Pn    *PushNotification
+	ChErr chan error
+}
+
+const (
+	signal_STOP = iota
+)
+
 // Client contains the fields necessary to communicate
 // with Apple, such as the gateway to use and your
 // certificate contents.
@@ -35,7 +42,6 @@ type SendErr struct {
 // but if you prefer you can use the CertificateBase64
 // and KeyBase64 fields to store the actual contents.
 type Client struct {
-	sync.RWMutex
 	Gateway           string
 	CertificateFile   string
 	CertificateBase64 string
@@ -43,10 +49,13 @@ type Client struct {
 	KeyBase64         string
 	certificate       tls.Certificate
 	apnsConnection    *tls.Conn
-	errChan           chan *errResponse
+	chErrResponse     chan *errResponse
+	chSend            chan *opSend
+	chSignal          chan int
+	chConnect         chan chan error
+	chConnectionErr   chan *tls.Conn
 	sentQ             *pnQueue
 	counter           int32
-	running           bool
 }
 
 // BareClient can be used to set the contents of your
@@ -70,27 +79,47 @@ func NewClient(gateway, certificateFile, keyFile string) (c *Client) {
 func create(gateway string) (c *Client) {
 	c = new(Client)
 	c.Gateway = gateway
-	c.errChan = make(chan *errResponse, 10)
+	c.chErrResponse = make(chan *errResponse, 10)
+	c.chSend = make(chan *opSend)
+	c.chConnect = make(chan chan error)
+	c.chConnectionErr = make(chan *tls.Conn)
+	c.chSignal = make(chan int)
 	c.sentQ = newPnQueue(MAX_SEND_Q)
-	c.running = true
 
-	go func() {
-		for res := range c.errChan {
-			c.handleErrResponse(res)
-		}
-	}()
+	go c.run()
 
 	return c
 }
 
-func (client *Client) handleErrResponse(res *errResponse) {
-	client.Lock()
-	defer client.Unlock()
-
-	if !client.running {
-		return
+func (p *Client) run() {
+	defer log.Printf("client %p stop running \f", p)
+	for {
+		select {
+		case res := <-p.chErrResponse:
+			p.handleErrResponse(res)
+		case op := <-p.chSend:
+			op.ChErr <- p.innerSend(op.Pn)
+		case ch := <-p.chConnect:
+			if p.apnsConnection == nil {
+				ch <- p.openConnection()
+			} else {
+				ch <- nil
+			}
+		case conn := <-p.chConnectionErr:
+			if p.apnsConnection == conn {
+				p.innerClose()
+			} else {
+				go conn.Close()
+			}
+		case <-p.chSignal:
+			p.innerClose()
+			//final stop
+			return
+		}
 	}
+}
 
+func (client *Client) handleErrResponse(res *errResponse) {
 	if res.Command == 0 {
 		//no error
 		return
@@ -100,7 +129,7 @@ func (client *Client) handleErrResponse(res *errResponse) {
 	log.Printf("handle err response %d, %##v\n", res.Identifier, errPn)
 
 	if errPn == nil {
-		log.Println("[warn] MAX_SEND_Q is too short:", MAX_SEND_Q)
+		log.Println("[warn] maybe MAX_SEND_Q is too short:", MAX_SEND_Q)
 		return
 	}
 
@@ -110,26 +139,28 @@ func (client *Client) handleErrResponse(res *errResponse) {
 
 	client.sentQ.Clear()
 
-	if len(reSend) > 0 {
-		go func(l []*PushNotification) {
-			for _, pn := range l {
-				if err := client.Send(pn); err != nil {
-					log.Println("re-send err", err, pn.Identifier)
-				}
-			}
-		}(reSend)
+	if len(reSend) == 0 {
+		return
 	}
+
+	go func(l []*PushNotification) {
+		for _, pn := range l {
+			if err := client.Send(pn); err != nil {
+				log.Println("re-send err", err, pn.Identifier)
+			}
+		}
+	}(reSend)
+}
+
+func (client *Client) Send(pn *PushNotification) error {
+	op := &opSend{Pn: pn, ChErr: make(chan error)}
+	client.chSend <- op
+	return <-op.ChErr
 }
 
 // Send connects to the APN service and sends your push notification.
 // Remember that if the submission is successful, Apple won't reply.
-func (client *Client) Send(pn *PushNotification) error {
-	client.Lock()
-	defer client.Unlock()
-
-	if !client.running {
-		return fmt.Errorf("client is not running")
-	}
+func (client *Client) innerSend(pn *PushNotification) error {
 
 	pn.Identifier = client.counter
 	client.counter = (client.counter + 1) % IdentifierUbound
@@ -153,17 +184,9 @@ func (client *Client) Send(pn *PushNotification) error {
 }
 
 func (client *Client) Connect() error {
-	client.Lock()
-	defer client.Unlock()
-
-	if !client.running {
-		return fmt.Errorf("client is not running")
-	}
-
-	if client.apnsConnection == nil {
-		return client.openConnection()
-	}
-	return nil
+	op := make(chan error)
+	client.chConnect <- op
+	return <-op
 }
 
 // ConnectAndWrite establishes the connection to Apple and handles the
@@ -234,6 +257,10 @@ func (client *Client) openConnection() error {
 	}
 
 	tlsConn := tls.Client(conn, conf)
+	//add handshake timeout
+	if err := tlsConn.SetWriteDeadline(time.Now().Add(TIME_OUT)); err != nil {
+		return err
+	}
 	err = tlsConn.Handshake()
 	if err != nil {
 		log.Println("tls handshake err", err)
@@ -241,41 +268,22 @@ func (client *Client) openConnection() error {
 	}
 
 	client.apnsConnection = tlsConn
-	go startRead(client, tlsConn)
+	go read(client, tlsConn)
 	return nil
 }
 
 func (p *Client) tryReset(conn *tls.Conn) {
-	p.Lock()
-	defer p.Unlock()
-
-	if !p.running {
-		return
-	}
-
 	if p.apnsConnection == conn {
 		p.apnsConnection = nil
 	}
 }
 
-func (p *Client) saveErr(errRsp *errResponse) {
-	p.Lock()
-	defer p.Unlock()
-
-	if !p.running {
-		return
-	}
-
-	p.errChan <- errRsp
-
-}
-func startRead(client *Client, conn *tls.Conn) {
+func read(client *Client, conn *tls.Conn) {
 	buffer := make([]byte, ERR_RESPONSE_LEN)
 
 	if _, err := conn.Read(buffer); err != nil {
 		log.Printf("read err %v, %v, %p\n", err, err == io.EOF, client)
-		conn.Close()
-		go client.tryReset(conn)
+		client.chConnectionErr <- conn
 		return
 	}
 
@@ -302,7 +310,7 @@ func startRead(client *Client, conn *tls.Conn) {
 
 	log.Printf("get err response : %##v, %s\n", errRsp, errMsg)
 
-	go client.saveErr(errRsp)
+	client.chErrResponse <- errRsp
 }
 
 // Returns a certificate to use to send the notification.
@@ -324,21 +332,13 @@ func (client *Client) getCertificate() error {
 	return err
 }
 
-func (client *Client) Close() {
-	client.Lock()
-	defer client.Unlock()
+func (p *Client) Stop() {
+	p.chSignal <- signal_STOP
+}
 
-	if !client.running {
-		return
+func (client *Client) innerClose() {
+	if client.apnsConnection != nil {
+		go client.apnsConnection.Close()
+		client.apnsConnection = nil
 	}
-
-	client.running = false
-	close(client.errChan)
-
-	conn := client.apnsConnection
-	if conn == nil {
-		return
-	}
-	go conn.Close()
-	client.apnsConnection = nil
 }
