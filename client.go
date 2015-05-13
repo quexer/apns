@@ -86,8 +86,6 @@ func create(gateway string) (c *Client) {
 	c.chSignal = make(chan int)
 	c.sentQ = newPnQueue(MAX_SEND_Q)
 
-	go c.run()
-
 	return c
 }
 
@@ -184,6 +182,8 @@ func (client *Client) innerSend(pn *PushNotification) error {
 }
 
 func (client *Client) Connect() error {
+	go client.run()
+
 	op := make(chan error)
 	client.chConnect <- op
 	return <-op
