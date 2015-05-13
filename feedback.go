@@ -59,12 +59,12 @@ func (client *Client) ListenForFeedback() (err error) {
 		ServerName:   strings.Split(client.Gateway, ":")[0],
 	}
 
-	conn, err := net.Dial("tcp", client.Gateway)
+	conn, err := net.DialTimeout("tcp", client.Gateway, time.Minute)
 	if err != nil {
 		return err
 	}
 	defer conn.Close()
-	conn.SetReadDeadline(time.Now().Add(FeedbackTimeoutSeconds * time.Second))
+	conn.SetDeadline(time.Now().Add(FeedbackTimeoutSeconds * time.Second))
 
 	tlsConn := tls.Client(conn, conf)
 	err = tlsConn.Handshake()
