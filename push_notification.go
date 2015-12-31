@@ -91,11 +91,7 @@ func NewPushNotification() (pn *PushNotification) {
 // AddPayload sets the "aps" payload section of the request. It also
 // has a hack described within to deal with specific zero values.
 func (pn *PushNotification) AddPayload(p *Payload) {
-	p2 := NewPayload()
-	p2.Badge = p.Badge
-	p2.Alert = p.Alert
-	p2.ContentAvailable = p.ContentAvailable
-	p2.Sound = p.Sound
+	tmp := *p
 	// This deserves some explanation.
 	//
 	// Setting an exported field of type int to 0
@@ -109,12 +105,12 @@ func (pn *PushNotification) AddPayload(p *Payload) {
 	// through successfully.)
 	//
 	// Still a hack though :)
-	if p2.Badge == 0 {
-		p2.Badge = -1
-	}else if p2.Badge == -2{
-		p2.Badge = 0 //allow omit empty for -2.
+	if tmp.Badge == 0 {
+		tmp.Badge = -1
+	} else if tmp.Badge == -2 {
+		tmp.Badge = 0 //allow omit empty for -2.
 	}
-	pn.Set("aps", p2)
+	pn.Set("aps", tmp)
 }
 
 // Get returns the value of a payload key, if it exists.
