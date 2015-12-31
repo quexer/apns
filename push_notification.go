@@ -106,6 +106,8 @@ func (pn *PushNotification) AddPayload(p *Payload) {
 	// Still a hack though :)
 	if p.Badge == 0 {
 		p.Badge = -1
+	}else if p.Badge == -2{
+		p.Badge = 0 //allow omit empty for -2.
 	}
 	pn.Set("aps", p)
 }
